@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hearthledger — Zero-Based Household Budget</title>
+  <link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH6gsbByA1n7p38QAAABl0RVh0Q29tbWVudABDcmVhdGVkIHdpdGggR0lNUFeBDhcAAAAkSURBVCjPYxY6eZIBFTAxkAImRmpra2pqa2hoaWhoYGBgYAAAId8DFW7m7h8AAAAASUVORK5CYII=">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="main.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main budget content</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="#/">
+        <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="#163a2e"/>
+          <path d="M6 15.2L16 7l10 8.2V25a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-9.8z" fill="#faf8f4"/>
+          <rect x="10.5" y="15" width="11" height="2.8" rx="1" fill="#b57b24"/>
+          <rect x="10.5" y="19.8" width="7" height="2.8" rx="1" fill="#163a2e"/>
+        </svg>
+        <div>
+          <span class="brand-name">Hearthledger</span>
+          <span class="brand-sub">Mercer-Lin Family · Zero-Based Money</span>
+        </div>
+      </a>
+
+      <nav class="primary-nav" aria-label="Budget sections">
+        <a href="#/" data-nav="overview">Overview</a>
+        <a href="#/envelopes" data-nav="envelopes">Envelopes</a>
+        <a href="#/ledger" data-nav="ledger">Ledger</a>
+        <a href="#/bills" data-nav="bills">Bills &amp; Calendar</a>
+        <a href="#/goals" data-nav="goals">Goals &amp; Debt</a>
+        <a href="#/planner" data-nav="planner">What-If Lab</a>
+      </nav>
+
+      <div class="header-controls">
+        <label class="month-picker" aria-label="Active budget month">
+          <select id="month-select">
+            <option value="2026-09">Sep 2026</option>
+            <option value="2026-10">Oct 2026</option>
+            <option value="2026-11" selected>Nov 2026</option>
+          </select>
+        </label>
+        <button type="button" class="btn btn-primary" id="open-quick-log">+ Log Expense</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="status-toast" class="status-toast" role="status" aria-live="polite" hidden></div>
+
+  <main id="main-content" class="site-main"></main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <span><strong>Hearthledger</strong> · Offline-first household budget &amp; sinking-fund ledger. Stored locally in your browser.</span>
+      <button type="button" class="btn-link" id="reset-demo-btn">Reset Mercer-Lin Demo Figures</button>
+    </div>
+  </footer>
+
+  <dialog id="quick-entry-dialog" class="modal-dialog" aria-labelledby="quick-dialog-title">
+    <form method="dialog" id="quick-entry-form" class="modal-form">
+      <div class="modal-head">
+        <h2 id="quick-dialog-title">Log Household Transaction</h2>
+        <button type="button" class="btn-icon-del" id="close-quick-log" aria-label="Close">&times;</button>
+      </div>
+      <div class="form-grid-2">
+        <label>Date <input type="date" name="date" id="quick-date" value="2026-11-26" required></label>
+        <label>Type
+          <select name="type">
+            <option value="expense">Expense</option>
+            <option value="income">Income</option>
+          </select>
+        </label>
+        <label>Payee <input type="text" name="payee" placeholder="e.g. H-E-B Grocery" required></label>
+        <label>Amount ($) <input type="number" name="amount" step="0.01" min="0.01" placeholder="54.20" required></label>
+        <label>Envelope <select name="envelopeId" id="quick-envelope-select"></select></label>
+        <label>Account <select name="accountId" id="quick-account-select"></select></label>
+        <label>Partner
+          <select name="member">
+            <option value="Joint">Joint</option>
+            <option value="Maya">Maya</option>
+            <option value="Sam">Sam</option>
+          </select>
+        </label>
+        <label>Memo <input type="text" name="memo" placeholder="Optional household note"></label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="cancel-quick-log">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save to Ledger</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

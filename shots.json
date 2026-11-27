@@ -1,0 +1,6 @@
+[
+  { "file": "1-overview-desktop.jpg", "path": "#/", "viewport": { "width": 1280, "height": 800 }, "mobile": false },
+  { "file": "2-envelopes-plan.jpg", "path": "#/envelopes", "viewport": { "width": 1280, "height": 800 }, "mobile": false },
+  { "file": "3-goals-payoff-lab.jpg", "path": "#/goals", "viewport": { "width": 1280, "height": 800 }, "mobile": false },
+  { "file": "4-ledger-phone.jpg", "path": "#/ledger", "viewport": { "width": 390, "height": 844 }, "mobile": true }
+]
