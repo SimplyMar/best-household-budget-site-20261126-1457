@@ -1,4 +1,5 @@
-// Financial calculations for zero-based envelopes, daily pacing, debt amortization, and runway stress tests.
+// Core zero-based budget math for Overview, Envelopes, and Account Reconciliation.
+// Debt amortization and What-If runway calculators live in lazy-loaded modules to keep first load lean.
 
 export function formatMoney(amount, showSign = false) {
   const n = Number(amount) || 0;
@@ -28,14 +29,12 @@ export function monthLabel(monthKey) {
 }
 
 export function computeEnvelopeBalances(state, monthKey = state.activeMonth) {
-  const txForMonth = state.transactions.filter((t) => t.date.startsWith(monthKey));
   const spentByEnvelope = new Map();
-  for (const tx of txForMonth) {
-    if (tx.type === "expense" && tx.envelopeId) {
+  for (const tx of state.transactions) {
+    if (tx.date.startsWith(monthKey) && tx.type === "expense" && tx.envelopeId) {
       spentByEnvelope.set(tx.envelopeId, (spentByEnvelope.get(tx.envelopeId) ?? 0) + Number(tx.amount));
     }
   }
-
   return state.envelopes.map((env) => {
     const rollover = Number(env.rolloverByMonth?.[monthKey] ?? 0);
     const assigned = Number(env.assignedByMonth?.[monthKey] ?? 0);
@@ -57,7 +56,6 @@ export function reconcileAccounts(state) {
       if (tx.cleared) clearedDelta += signed;
       else unclearedDelta += signed;
     }
-    // Credit HYSA when emergency_reserve transfer leaves checking.
     const inboundTransfers = acc.id === "hysa"
       ? state.transactions
           .filter((t) => t.date.startsWith("2026-11") && t.envelopeId === "emergency_reserve" && t.cleared)
@@ -77,8 +75,9 @@ export function reconcileAccounts(state) {
 
 export function computeMonthSummary(state, monthKey = state.activeMonth) {
   const envelopes = computeEnvelopeBalances(state, monthKey);
-  const txForMonth = state.transactions.filter((t) => t.date.startsWith(monthKey));
-  const income = txForMonth.filter((t) => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
+  const income = state.transactions
+    .filter((t) => t.date.startsWith(monthKey) && t.type === "income")
+    .reduce((s, t) => s + Number(t.amount), 0);
 
   const assignedTotal = envelopes.reduce((s, e) => s + e.assigned, 0);
   const rolloverTotal = envelopes.reduce((s, e) => s + e.rollover, 0);
@@ -86,7 +85,6 @@ export function computeMonthSummary(state, monthKey = state.activeMonth) {
 
   const groupMap = new Map(state.envelopeGroups.map((g) => [g.id, g]));
   let consumptionSpent = 0;
-  let consumptionBudget = 0;
   let wealthAndSinkingAssigned = 0;
   let needsAssigned = 0;
   let wantsAssigned = 0;
@@ -97,7 +95,6 @@ export function computeMonthSummary(state, monthKey = state.activeMonth) {
       wealthAndSinkingAssigned += env.assigned;
     } else {
       consumptionSpent += env.spent;
-      consumptionBudget += env.assigned + env.rollover;
       if (env.groupId === "sinking") wealthAndSinkingAssigned += env.assigned;
     }
     if (g?.bucket === "needs") needsAssigned += env.assigned;
@@ -105,13 +102,16 @@ export function computeMonthSummary(state, monthKey = state.activeMonth) {
   }
 
   const totalOutflows = envelopes.reduce((s, e) => s + e.spent, 0);
-  const availableInSpendingEnvelopes = envelopes.filter((e) => e.groupId !== "wealth_debt").reduce((s, e) => s + e.available, 0);
+  const availableInSpendingEnvelopes = envelopes
+    .filter((e) => e.groupId !== "wealth_debt")
+    .reduce((s, e) => s + e.available, 0);
   const overspentEnvelopes = envelopes.filter((e) => e.overspent);
   const savingsRatePct = income > 0 ? (wealthAndSinkingAssigned / income) * 100 : 0;
 
   const accounts = reconcileAccounts(state);
   const liquidCash = accounts.filter((a) => a.type !== "credit").reduce((s, a) => s + a.workingBalance, 0);
   const creditCardBalance = accounts.filter((a) => a.type === "credit").reduce((s, a) => s + a.workingBalance, 0);
+  const netLiquid = Number((liquidCash + creditCardBalance).toFixed(2));
 
   return {
     monthKey,
@@ -120,7 +120,6 @@ export function computeMonthSummary(state, monthKey = state.activeMonth) {
     rolloverTotal: Number(rolloverTotal.toFixed(2)),
     readyToAssign,
     consumptionSpent: Number(consumptionSpent.toFixed(2)),
-    consumptionBudget: Number(consumptionBudget.toFixed(2)),
     totalOutflows: Number(totalOutflows.toFixed(2)),
     availableInSpendingEnvelopes: Number(availableInSpendingEnvelopes.toFixed(2)),
     wealthAndSinkingAssigned: Number(wealthAndSinkingAssigned.toFixed(2)),
@@ -131,26 +130,22 @@ export function computeMonthSummary(state, monthKey = state.activeMonth) {
     overspentEnvelopes,
     envelopes,
     accounts,
-    liquidCash: Number(liquidCash.toFixed(2)),
-    creditCardBalance: Number(creditCardBalance.toFixed(2)),
-    netLiquid: Number((liquidCash + creditCardBalance).toFixed(2)),
-    runwayMonths: Number(((liquidCash + creditCardBalance) / state.profile.coreMonthlyExpensesBaseline).toFixed(1)),
+    netLiquid,
+    runwayMonths: Number((netLiquid / state.profile.coreMonthlyExpensesBaseline).toFixed(1)),
   };
 }
 
 export function computeDailyPaceSeries(state, monthKey = state.activeMonth) {
   const totalDays = daysInMonth(monthKey);
   const currentDay = monthKey === "2026-11" ? 26 : totalDays;
-  const fixedEnvelopeIds = new Set(["mortgage", "childcare", "debt_auto", "debt_card", "emergency_reserve", "college_529"]);
+  const fixedIds = new Set(["mortgage", "childcare", "debt_auto", "debt_card", "emergency_reserve", "college_529"]);
 
   const envelopes = computeEnvelopeBalances(state, monthKey);
-  // Compare variable monthly spending against this month's newly assigned variable budget (excluding multi-month sinking rollovers).
-  const flexiblePool = envelopes.filter((e) => !fixedEnvelopeIds.has(e.id)).reduce((s, e) => s + e.assigned, 0);
+  const flexiblePool = envelopes.filter((e) => !fixedIds.has(e.id)).reduce((s, e) => s + e.assigned, 0);
 
   const byDay = new Array(totalDays + 1).fill(0);
   for (const tx of state.transactions) {
-    if (!tx.date.startsWith(monthKey) || tx.type !== "expense") continue;
-    if (fixedEnvelopeIds.has(tx.envelopeId)) continue;
+    if (!tx.date.startsWith(monthKey) || tx.type !== "expense" || fixedIds.has(tx.envelopeId)) continue;
     const d = Number(tx.date.slice(8, 10));
     if (d >= 1 && d <= totalDays) byDay[d] += Number(tx.amount);
   }
@@ -159,107 +154,13 @@ export function computeDailyPaceSeries(state, monthKey = state.activeMonth) {
   let cumulative = 0;
   for (let d = 1; d <= totalDays; d += 1) {
     cumulative += byDay[d];
-    const ideal = (flexiblePool * d) / totalDays;
     points.push({
       day: d,
       actual: d <= currentDay ? Number(cumulative.toFixed(2)) : null,
-      ideal: Number(ideal.toFixed(2)),
-      dailySpend: Number(byDay[d].toFixed(2)),
+      ideal: Number(((flexiblePool * d) / totalDays).toFixed(2)),
     });
   }
   const todayPoint = points[currentDay - 1] ?? points[points.length - 1];
   const paceDelta = Number(((todayPoint?.ideal ?? 0) - (todayPoint?.actual ?? 0)).toFixed(2));
   return { totalDays, currentDay, flexiblePool: Number(flexiblePool.toFixed(2)), points, paceDelta };
-}
-
-export function simulateDebtPayoff(debts, extraMonthly = 250, strategy = "avalanche") {
-  const ordered = debts.map((d) => ({ ...d, rem: Number(d.balance) }));
-  const sortFn = strategy === "avalanche"
-    ? (a, b) => b.apr - a.apr || a.rem - b.rem
-    : (a, b) => a.rem - b.rem || b.apr - a.apr;
-
-  const totalMinimums = ordered.reduce((s, d) => s + Number(d.minPayment), 0);
-  const monthlyBudget = totalMinimums + Math.max(0, Number(extraMonthly));
-  const curve = [{ month: 0, totalBalance: Number(ordered.reduce((s, d) => s + d.rem, 0).toFixed(2)) }];
-
-  let months = 0;
-  let totalInterest = 0;
-  const payoffOrder = [];
-
-  while (ordered.some((d) => d.rem > 0.01) && months < 180) {
-    months += 1;
-    for (const d of ordered) {
-      if (d.rem <= 0.01) continue;
-      const interest = d.rem * (d.apr / 100 / 12);
-      d.rem += interest;
-      totalInterest += interest;
-    }
-    let pool = monthlyBudget;
-    for (const d of ordered) {
-      if (d.rem <= 0.01) continue;
-      const pay = Math.min(d.rem, d.minPayment);
-      d.rem -= pay;
-      pool -= pay;
-      if (d.rem <= 0.01) {
-        d.rem = 0;
-        if (!payoffOrder.find((p) => p.id === d.id)) payoffOrder.push({ id: d.id, name: d.name, month: months });
-      }
-    }
-    const targets = ordered.filter((d) => d.rem > 0.01).sort(sortFn);
-    for (const target of targets) {
-      if (pool <= 0.01) break;
-      const pay = Math.min(target.rem, pool);
-      target.rem -= pay;
-      pool -= pay;
-      if (target.rem <= 0.01) {
-        target.rem = 0;
-        if (!payoffOrder.find((p) => p.id === target.id)) payoffOrder.push({ id: target.id, name: target.name, month: months });
-      }
-    }
-    curve.push({ month: months, totalBalance: Number(ordered.reduce((s, d) => s + d.rem, 0).toFixed(2)) });
-  }
-
-  const endTotalMonths = 2026 * 12 + 10 + months;
-  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return {
-    strategy,
-    months,
-    debtFreeLabel: `${names[endTotalMonths % 12]} ${Math.floor(endTotalMonths / 12)}`,
-    totalInterest: Number(totalInterest.toFixed(2)),
-    monthlyBudget: Number(monthlyBudget.toFixed(2)),
-    curve,
-    payoffOrder,
-  };
-}
-
-export function projectWhatIfScenario(summary, scenario) {
-  const incomeAfterDelta = summary.income + Number(scenario.incomeDelta ?? 0);
-  const baseLiving = summary.assignedTotal - summary.wealthAndSinkingAssigned;
-  const groceryInflationImpact = 760 * (Number(scenario.groceryInflationPct ?? 0) / 100);
-  const trimWants = Number(scenario.trimDiscretionary ?? 0);
-  const newExpenseRunRate = Math.max(1800, baseLiving + groceryInflationImpact - trimWants + Number(scenario.newFixedCost ?? 0));
-  const monthlySurplus = Number((incomeAfterDelta - newExpenseRunRate).toFixed(2));
-
-  const startingReserve = 16400;
-  const projection = [];
-  let reserve = startingReserve;
-  for (let m = 0; m <= 12; m += 1) {
-    projection.push({ month: m, reserve: Number(Math.max(0, reserve).toFixed(2)) });
-    const monthlyYield = reserve > 0 ? reserve * (0.0435 / 12) : 0;
-    reserve = reserve + monthlyYield + monthlySurplus;
-  }
-
-  const emergencyBurn = Math.max(2500, newExpenseRunRate - 450);
-  const runwayMonths = monthlySurplus >= 0
-    ? Number((startingReserve / emergencyBurn).toFixed(1))
-    : Number((startingReserve / Math.abs(monthlySurplus)).toFixed(1));
-
-  return {
-    incomeAfterDelta: Number(incomeAfterDelta.toFixed(2)),
-    newExpenseRunRate: Number(newExpenseRunRate.toFixed(2)),
-    monthlySurplus,
-    runwayMonths,
-    projection,
-    sustainable: monthlySurplus >= 0,
-  };
 }

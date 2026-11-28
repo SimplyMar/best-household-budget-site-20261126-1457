@@ -1,5 +1,5 @@
-// Application router, interactive event delegation, and lazy route loading.
-// Overview renders on first load; secondary tools load on demand via literal import() for fast startup.
+// Application router, sidebar synchronization, interactive delegation, and lazy route loading.
+// Overview renders on first load; secondary modules load on demand via literal import() for fast startup.
 
 import { computeMonthSummary, formatMoney } from "./budget-math.js";
 import { escapeHtml } from "./charts.js";
@@ -13,6 +13,7 @@ import {
   importTransactionsBatch,
   resetHouseholdData,
   setActiveMonth,
+  stepEnvelopeAssigned,
   subscribe,
   toggleBillPaid,
   toggleTransactionCleared,
@@ -26,6 +27,10 @@ const monthSelect = document.getElementById("month-select");
 const toastEl = document.getElementById("status-toast");
 const dialogEl = document.getElementById("quick-entry-dialog");
 const quickForm = document.getElementById("quick-entry-form");
+const sidebarLiquidEl = document.getElementById("sidebar-liquid");
+const sidebarRunwayEl = document.getElementById("sidebar-runway");
+const sidebarDayEl = document.getElementById("sidebar-day-chip");
+const mobileStatusEl = document.getElementById("mobile-status-pill");
 
 const uiState = {
   envelopeFilter: "all",
@@ -43,28 +48,41 @@ function announceStatus(message) {
   toastEl.textContent = message;
   toastEl.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toastEl.hidden = true;
-  }, 3200);
+  toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3200);
 }
 
 function currentRoute() {
   const raw = (window.location.hash || "#/").replace(/^#\/?/, "").split("?")[0].trim();
   if (!raw) return "overview";
-  if (["envelopes", "ledger", "bills", "goals", "planner"].includes(raw)) return raw;
-  return "overview";
+  return ["envelopes", "ledger", "bills", "goals", "planner"].includes(raw) ? raw : "overview";
+}
+
+function syncChrome(state, summary, route) {
+  if (monthSelect && monthSelect.value !== state.activeMonth) monthSelect.value = state.activeMonth;
+  if (sidebarLiquidEl) sidebarLiquidEl.textContent = formatMoney(summary.netLiquid);
+  if (sidebarRunwayEl) {
+    const rta = Math.abs(summary.readyToAssign) < 0.01 ? "$0 ready" : `${formatMoney(summary.readyToAssign)} ready`;
+    sidebarRunwayEl.textContent = `${summary.runwayMonths} mo core runway · ${rta}`;
+  }
+  if (sidebarDayEl) sidebarDayEl.textContent = state.activeMonth === "2026-11" ? "Day 26" : "Closed";
+  if (mobileStatusEl) {
+    const over = summary.overspentEnvelopes[0];
+    mobileStatusEl.textContent = over ? `$0 Ready · ${formatMoney(Math.abs(over.available))} Over` : "Zero-Based OK";
+  }
+  document.querySelectorAll("[data-nav]").forEach((link) => {
+    const active = link.getAttribute("data-nav") === route;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
 }
 
 function populateQuickModalOptions(state) {
   const envSel = document.getElementById("quick-envelope-select");
   const accSel = document.getElementById("quick-account-select");
   const dateInp = document.getElementById("quick-date");
-  if (envSel) {
-    envSel.innerHTML = state.envelopes.map((e) => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)}</option>`).join("");
-  }
-  if (accSel) {
-    accSel.innerHTML = state.accounts.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join("");
-  }
+  if (envSel) envSel.innerHTML = state.envelopes.map((e) => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)}</option>`).join("");
+  if (accSel) accSel.innerHTML = state.accounts.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join("");
   if (dateInp) dateInp.value = `${state.activeMonth}-26`;
 }
 
@@ -76,16 +94,7 @@ export async function renderCurrentRoute(preserveScroll = false) {
   const state = getState();
   const summary = computeMonthSummary(state, state.activeMonth);
   const route = currentRoute();
-
-  if (monthSelect && monthSelect.value !== state.activeMonth) {
-    monthSelect.value = state.activeMonth;
-  }
-  document.querySelectorAll("[data-nav]").forEach((link) => {
-    const active = link.getAttribute("data-nav") === route;
-    link.classList.toggle("active", active);
-    if (active) link.setAttribute("aria-current", "page");
-    else link.removeAttribute("aria-current");
-  });
+  syncChrome(state, summary, route);
 
   let html = "";
   let pageTitle = "Overview";
@@ -136,6 +145,9 @@ document.addEventListener("click", async (event) => {
   if (action === "quick-cover") {
     const ok = coverOverspentEnvelope(btn.dataset.target, btn.dataset.source, Number(btn.dataset.amount));
     if (ok) announceStatus(`Covered ${formatMoney(Number(btn.dataset.amount))} overspend cleanly.`);
+  } else if (action === "step-assigned") {
+    stepEnvelopeAssigned(btn.dataset.envelopeId, Number(btn.dataset.delta));
+    announceStatus("Adjusted monthly envelope allocation.");
   } else if (action === "toggle-bill") {
     toggleBillPaid(btn.dataset.billId);
     announceStatus("Updated recurring bill payment status.");
@@ -149,22 +161,20 @@ document.addEventListener("click", async (event) => {
     toggleTransactionCleared(btn.dataset.txId);
   } else if (action === "delete-tx") {
     deleteTransaction(btn.dataset.txId);
-    announceStatus("Removed transaction from household ledger.");
+    announceStatus("Removed transaction from ledger.");
   } else if (action === "boost-goal") {
     contributeToGoal(btn.dataset.goalId, 50);
     announceStatus("Added $50.00 sinking contribution to goal.");
   } else if (action === "set-debt-strategy") {
     updateWhatIf({ debtStrategy: btn.dataset.strategy });
   } else if (action === "apply-preset") {
-    const patch = WHATIF_PRESETS[btn.dataset.preset] ?? WHATIF_PRESETS.baseline;
-    updateWhatIf(patch);
+    updateWhatIf(WHATIF_PRESETS[btn.dataset.preset] ?? WHATIF_PRESETS.baseline);
   } else if (action === "export-csv") {
     const state = getState();
     const summary = computeMonthSummary(state, state.activeMonth);
     const envMap = new Map(summary.envelopes.map((e) => [e.id, e]));
     const io = await import("./csv-io.js");
-    const csv = io.transactionsToCsv(state.transactions, envMap);
-    io.triggerDownload(`hearthledger-${state.activeMonth}.csv`, csv);
+    io.triggerDownload(`hearthledger-${state.activeMonth}.csv`, io.transactionsToCsv(state.transactions, envMap));
     announceStatus("Exported household ledger CSV.");
   }
 });
@@ -190,10 +200,8 @@ document.addEventListener("change", async (event) => {
     uiState.ledgerScope = el.value;
     renderCurrentRoute(true);
   } else if (action === "import-csv" && el.files?.[0]) {
-    const text = await el.files[0].text();
     const io = await import("./csv-io.js");
-    const rows = io.parseTransactionsCsv(text);
-    const count = importTransactionsBatch(rows);
+    const count = importTransactionsBatch(io.parseTransactionsCsv(await el.files[0].text()));
     announceStatus(`Imported ${count} transaction(s) from CSV.`);
   }
 });
@@ -223,11 +231,10 @@ document.addEventListener("submit", (event) => {
     event.preventDefault();
     const fd = new FormData(form);
     coverOverspentEnvelope(fd.get("targetId"), fd.get("sourceId"), Number(fd.get("amount")));
-    announceStatus("Moved surplus funds to cover overspent category.");
+    announceStatus("Rebalanced overspent category.");
   } else if (kind === "add-inline-tx") {
     event.preventDefault();
-    const fd = new FormData(form);
-    addTransaction(Object.fromEntries(fd.entries()));
+    addTransaction(Object.fromEntries(new FormData(form).entries()));
     form.reset();
     announceStatus("Recorded transaction in household ledger.");
   } else if (kind === "add-split-tx") {
@@ -249,16 +256,14 @@ document.addEventListener("submit", (event) => {
   }
 });
 
-document.getElementById("open-quick-log")?.addEventListener("click", () => {
-  populateQuickModalOptions(getState());
-  dialogEl?.showModal();
-});
+const openModal = () => { populateQuickModalOptions(getState()); dialogEl?.showModal(); };
+document.getElementById("open-quick-log")?.addEventListener("click", openModal);
+document.getElementById("open-quick-log-mobile")?.addEventListener("click", openModal);
 document.getElementById("close-quick-log")?.addEventListener("click", () => dialogEl?.close());
 document.getElementById("cancel-quick-log")?.addEventListener("click", () => dialogEl?.close());
 quickForm?.addEventListener("submit", (event) => {
   event.preventDefault();
-  const fd = new FormData(quickForm);
-  addTransaction(Object.fromEntries(fd.entries()));
+  addTransaction(Object.fromEntries(new FormData(quickForm).entries()));
   quickForm.reset();
   dialogEl?.close();
   announceStatus("Saved transaction and updated envelope balance.");
@@ -269,11 +274,6 @@ document.getElementById("reset-demo-btn")?.addEventListener("click", () => {
   announceStatus("Restored Mercer-Lin household demo data.");
 });
 
-subscribe(() => {
-  renderCurrentRoute(true);
-});
-window.addEventListener("hashchange", () => {
-  renderCurrentRoute(false);
-});
-
+subscribe(() => renderCurrentRoute(true));
+window.addEventListener("hashchange", () => renderCurrentRoute(false));
 renderCurrentRoute(false);

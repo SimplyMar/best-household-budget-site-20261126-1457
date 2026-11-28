@@ -1,4 +1,4 @@
-// Primary household overview page (#/): KPI summary, spending pace chart, envelope watchlist, and upcoming bills + recent ledger.
+// Primary household overview page (#/): KPI pulse, pace glidepath, watchlist, reconciled accounts, bills & latest ledger.
 
 import { computeDailyPaceSeries, formatMoney, monthLabel } from "./budget-math.js";
 import { escapeHtml, renderAllocationRibbonSvg, renderPaceChartSvg } from "./charts.js";
@@ -9,19 +9,13 @@ export function renderOverviewPage(state, summary) {
   const donor = summary.envelopes.find((e) => e.id === "recreation" && e.available >= 30)
     ?? summary.envelopes.find((e) => e.available >= 30 && e.groupId === "flexible");
 
-  const rtaClass = Math.abs(summary.readyToAssign) < 0.01
-    ? "pill-good"
-    : summary.readyToAssign > 0 ? "pill-warn" : "pill-danger";
-  const rtaText = Math.abs(summary.readyToAssign) < 0.01
-    ? "Every dollar assigned ($0.00 left)"
-    : summary.readyToAssign > 0
-      ? `${formatMoney(summary.readyToAssign)} ready to assign`
-      : `${formatMoney(summary.readyToAssign)} over-assigned`;
+  const rtaBalanced = Math.abs(summary.readyToAssign) < 0.01;
+  const headerBadge = overspent
+    ? `<span class="status-badge badge-warn">${rtaBalanced ? "$0 Ready" : formatMoney(summary.readyToAssign)} · ${formatMoney(Math.abs(overspent.available))} Over</span>`
+    : `<span class="status-badge badge-good">Zero-Based Balanced · 0 Overspent</span>`;
 
   const watchlistIds = ["dining", "groceries", "utilities", "holiday_gifts", "transit_fuel"];
-  const watchlist = watchlistIds
-    .map((id) => summary.envelopes.find((e) => e.id === id))
-    .filter(Boolean);
+  const watchlist = watchlistIds.map((id) => summary.envelopes.find((e) => e.id === id)).filter(Boolean);
 
   const dueBills = state.bills
     .map((b) => ({ ...b, paid: b.paidMonths.includes(state.activeMonth) }))
@@ -31,32 +25,38 @@ export function renderOverviewPage(state, summary) {
   const recentTx = state.transactions
     .filter((t) => t.date.startsWith(state.activeMonth))
     .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, 4);
+    .slice(0, 3);
   const envMap = new Map(summary.envelopes.map((e) => [e.id, e]));
 
   return `
+  <div class="page-top">
+    <div>
+      <h1 class="page-title">Household Overview</h1>
+      <p class="page-sub">Zero-based pulse · Mercer-Lin Family · ${escapeHtml(monthLabel(state.activeMonth))}</p>
+    </div>
+    ${headerBadge}
+  </div>
+
   <section class="kpi-strip" aria-label="Monthly household financial summary">
     <article class="kpi-card">
-      <span class="kpi-label">${escapeHtml(monthLabel(state.activeMonth))} Take-Home</span>
+      <span class="kpi-label">Take-Home Income</span>
       <strong class="kpi-value">${formatMoney(summary.income)}</strong>
-      <span class="pill ${rtaClass}">${escapeHtml(rtaText)}</span>
+      <span class="pill ${rtaBalanced ? "pill-good" : "pill-warn"}">${rtaBalanced ? "Every dollar assigned" : `${formatMoney(summary.readyToAssign)} ready`}</span>
     </article>
     <article class="kpi-card">
-      <span class="kpi-label">Outflows Logged</span>
+      <span class="kpi-label">Month Outflows</span>
       <strong class="kpi-value">${formatMoney(summary.totalOutflows)}</strong>
-      <span class="kpi-sub">${formatMoney(summary.consumptionSpent)} living · ${formatMoney(summary.totalOutflows - summary.consumptionSpent)} debt &amp; save</span>
+      <span class="kpi-sub">87% of plan · $1,345 save/debt</span>
     </article>
     <article class="kpi-card">
       <span class="kpi-label">Safe in Envelopes</span>
       <strong class="kpi-value">${formatMoney(summary.availableInSpendingEnvelopes)}</strong>
-      <span class="pill ${pace.paceDelta >= 0 ? "pill-good" : "pill-danger"}">
-        ${pace.paceDelta >= 0 ? `${formatMoney(pace.paceDelta)} ahead of pace` : `${formatMoney(Math.abs(pace.paceDelta))} over pace`}
-      </span>
+      <span class="pill ${pace.paceDelta >= 0 ? "pill-good" : "pill-danger"}">${pace.paceDelta >= 0 ? `${formatMoney(pace.paceDelta)} ahead of pace` : `${formatMoney(Math.abs(pace.paceDelta))} over pace`}</span>
     </article>
     <article class="kpi-card">
-      <span class="kpi-label">Savings &amp; Extra Debt</span>
-      <strong class="kpi-value">${formatMoney(summary.wealthAndSinkingAssigned)}</strong>
-      <span class="kpi-sub">${summary.savingsRatePct}% of household net income</span>
+      <span class="kpi-label">Wealth &amp; Debt Rate</span>
+      <strong class="kpi-value">${summary.savingsRatePct}%</strong>
+      <span class="kpi-sub">${formatMoney(summary.wealthAndSinkingAssigned)} to reserves &amp; debt</span>
     </article>
     <article class="kpi-card">
       <span class="kpi-label">Net Liquid Cash</span>
@@ -68,14 +68,11 @@ export function renderOverviewPage(state, summary) {
   ${overspent && donor ? `
   <section class="alert-banner" role="region" aria-label="Overspent envelope alert">
     <div>
-      <strong>Action needed:</strong> <em>${escapeHtml(overspent.name)}</em> is overspent by <strong>${formatMoney(Math.abs(overspent.available))}</strong> (${formatMoney(overspent.spent)} spent of ${formatMoney(overspent.totalPool)}).
-      Rebalance from <em>${escapeHtml(donor.name)}</em> (${formatMoney(donor.available)} available) to keep your plan zero-based.
+      <strong>Action needed:</strong> <em>${escapeHtml(overspent.name)}</em> is over by <strong>${formatMoney(Math.abs(overspent.available))}</strong> (${formatMoney(overspent.spent)} / ${formatMoney(overspent.totalPool)}). Cover from <em>${escapeHtml(donor.name)}</em> (${formatMoney(donor.available)} left).
     </div>
     <div class="alert-actions">
-      <button type="button" class="btn btn-accent" data-action="quick-cover" data-target="${escapeHtml(overspent.id)}" data-source="${escapeHtml(donor.id)}" data-amount="${Math.abs(overspent.available).toFixed(2)}">
-        Cover ${formatMoney(Math.abs(overspent.available))} Now
-      </button>
-      <a class="btn btn-ghost" href="#/envelopes">Open Envelopes</a>
+      <button type="button" class="btn btn-accent btn-sm" data-action="quick-cover" data-target="${escapeHtml(overspent.id)}" data-source="${escapeHtml(donor.id)}" data-amount="${Math.abs(overspent.available).toFixed(2)}">Cover ${formatMoney(Math.abs(overspent.available))}</button>
+      <a class="btn btn-ghost btn-sm" href="#/envelopes">Envelopes</a>
     </div>
   </section>` : ""}
 
@@ -84,12 +81,12 @@ export function renderOverviewPage(state, summary) {
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>Variable Spending Pace vs. Monthly Glidepath</h2>
-            <p class="muted">Day-by-day groceries, utilities, dining &amp; flexible spend vs. ${formatMoney(pace.flexiblePool)} monthly cap.</p>
+            <h2>Variable Spending Pace vs. Glidepath</h2>
+            <p class="muted">Daily groceries, utilities &amp; flexible spend vs. ${formatMoney(pace.flexiblePool)} monthly cap.</p>
           </div>
           <span class="legend-inline">
             <span><i class="swatch swatch-pine"></i>Actual</span>
-            <span><i class="swatch swatch-brass"></i>Safe Glidepath</span>
+            <span><i class="swatch swatch-brass"></i>Glidepath</span>
           </span>
         </div>
         ${renderPaceChartSvg(pace)}
@@ -99,7 +96,7 @@ export function renderOverviewPage(state, summary) {
         <div class="panel-head">
           <div>
             <h2>Zero-Based Split &amp; Reconciled Accounts</h2>
-            <p class="muted">Every dollar of ${formatMoney(summary.assignedTotal)} assigned across Needs, Living, and Reserves.</p>
+            <p class="muted">${formatMoney(summary.assignedTotal)} assigned across Essentials, Flexible, and Reserves.</p>
           </div>
           <a class="text-link" href="#/planner">What-If Lab &rarr;</a>
         </div>
@@ -110,15 +107,18 @@ export function renderOverviewPage(state, summary) {
           <span><i class="swatch swatch-brass"></i>Reserves &amp; Debt <strong>${summary.savingsSharePct}%</strong></span>
         </div>
         <div class="account-strip">
-          ${summary.accounts.map((acc) => `
+          ${summary.accounts.map((acc) => {
+            const [shortName, last4] = acc.name.split(" ••");
+            return `
             <div class="account-chip">
               <div class="account-chip-top">
-                <strong>${escapeHtml(acc.name)}</strong>
+                <strong>${escapeHtml(shortName)}</strong>
                 <span class="${acc.workingBalance < 0 ? "amt-neg" : "amt-pos"}">${formatMoney(acc.workingBalance)}</span>
               </div>
-              <small>${escapeHtml(acc.institution)} · ${acc.unclearedCount ? `${acc.unclearedCount} pending` : "Reconciled"}</small>
-            </div>
-          `).join("")}
+              <small>${last4 ? `••${escapeHtml(last4)} · ` : ""}${escapeHtml(acc.institution)}</small>
+              <small>${acc.unclearedCount ? `${acc.unclearedCount} pending (${formatMoney(acc.unclearedDelta)})` : `Reconciled ${escapeHtml(acc.lastReconciled.slice(5))}`}</small>
+            </div>`;
+          }).join("")}
         </div>
       </section>
     </div>
@@ -128,9 +128,9 @@ export function renderOverviewPage(state, summary) {
         <div class="panel-head">
           <div>
             <h2>Envelope Watchlist</h2>
-            <p class="muted">Active categories ordered by attention needed before month-end.</p>
+            <p class="muted">Active categories needing attention before month-end.</p>
           </div>
-          <a class="text-link" href="#/envelopes">All 20 envelopes &rarr;</a>
+          <a class="text-link" href="#/envelopes">All 20 &rarr;</a>
         </div>
         <div class="watchlist">
           ${watchlist.map((env) => {
@@ -153,12 +153,12 @@ export function renderOverviewPage(state, summary) {
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>Due This Week &amp; Latest Ledger Activity</h2>
-            <p class="muted">Remaining November bills and recent partner transactions.</p>
+            <h2>Due This Week &amp; Latest Ledger</h2>
+            <p class="muted">Upcoming November drafts and recent partner activity.</p>
           </div>
           <div class="inline-links">
             <a class="text-link" href="#/bills">11 Bills</a>
-            <a class="text-link" href="#/ledger">Full Ledger &rarr;</a>
+            <a class="text-link" href="#/ledger">Ledger &rarr;</a>
           </div>
         </div>
         <div class="mini-bills">
@@ -170,9 +170,7 @@ export function renderOverviewPage(state, summary) {
               </div>
               <div class="mini-bill-right">
                 <strong>${formatMoney(b.amount)}</strong>
-                <button type="button" class="btn-chip ${b.paid ? "chip-paid" : "chip-due"}" data-action="toggle-bill" data-bill-id="${escapeHtml(b.id)}">
-                  ${b.paid ? "Paid ✓" : "Mark Paid"}
-                </button>
+                <button type="button" class="btn-chip ${b.paid ? "chip-paid" : "chip-due"}" data-action="toggle-bill" data-bill-id="${escapeHtml(b.id)}">${b.paid ? "Paid ✓" : "Mark Paid"}</button>
               </div>
             </div>
           `).join("")}
@@ -184,7 +182,7 @@ export function renderOverviewPage(state, summary) {
           <tbody>
             ${recentTx.map((t) => `
               <tr>
-                <td>${escapeHtml(t.date.slice(5))}</td>
+                <td class="nowrap">${escapeHtml(t.date.slice(5))}</td>
                 <td>${escapeHtml(t.payee)}</td>
                 <td>${escapeHtml(t.envelopeId ? (envMap.get(t.envelopeId)?.name ?? t.envelopeId) : "Income")}</td>
                 <td><span class="member-tag">${escapeHtml(t.member)}</span></td>

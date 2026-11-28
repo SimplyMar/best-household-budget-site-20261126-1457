@@ -1,5 +1,5 @@
-// Hearthledger submission entrypoint for make.fun best-household-budget-site-20261126-1457.
-// Copies the static household budget app and verified screenshots into the grader output root and emits dossier.json.
+// Hearthledger v3 submission entrypoint for make.fun best-household-budget-site-20261126-1457.
+// Stages the modular static household budget app and verified screenshots into /output and writes dossier.json.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

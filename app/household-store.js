@@ -12,7 +12,7 @@ import {
   SINKING_GOALS,
 } from "./household-data.js";
 
-const STORAGE_KEY = "hearthledger_state_v1";
+const STORAGE_KEY = "hearthledger_state_v3";
 
 function cloneSeedState() {
   return JSON.parse(JSON.stringify({
@@ -53,7 +53,7 @@ export function getState() {
       }
     }
   } catch {
-    // Fallback to in-memory state when storage is restricted.
+    // Fallback to memory when storage is unavailable.
   }
   memoryState = cloneSeedState();
   return memoryState;
@@ -95,10 +95,18 @@ export function updateEnvelopeAssigned(envelopeId, amount, monthKey = getState()
   commit();
 }
 
-export function coverOverspentEnvelope(targetEnvelopeId, sourceEnvelopeId, amount, monthKey = getState().activeMonth) {
+export function stepEnvelopeAssigned(envelopeId, delta, monthKey = getState().activeMonth) {
+  const env = getState().envelopes.find((e) => e.id === envelopeId);
+  if (!env) return;
+  const next = Math.max(0, Number(env.assignedByMonth[monthKey] ?? 0) + Number(delta));
+  env.assignedByMonth[monthKey] = Math.round(next * 100) / 100;
+  commit();
+}
+
+export function coverOverspentEnvelope(targetId, sourceId, amount, monthKey = getState().activeMonth) {
   const s = getState();
-  const target = s.envelopes.find((e) => e.id === targetEnvelopeId);
-  const source = s.envelopes.find((e) => e.id === sourceEnvelopeId);
+  const target = s.envelopes.find((e) => e.id === targetId);
+  const source = s.envelopes.find((e) => e.id === sourceId);
   const shift = Math.max(0, Math.round(Number(amount) * 100) / 100);
   if (!target || !source || shift <= 0 || target.id === source.id) return false;
   source.assignedByMonth[monthKey] = Math.max(0, Number(((source.assignedByMonth[monthKey] ?? 0) - shift).toFixed(2)));
@@ -171,12 +179,13 @@ export function toggleBillPaid(billId, monthKey = getState().activeMonth) {
     bill.paidMonths.splice(idx, 1);
   } else {
     bill.paidMonths.push(monthKey);
-    const hasTx = s.transactions.some((t) => t.date.startsWith(monthKey) && t.envelopeId === bill.envelopeId && Math.abs(t.amount - bill.amount) < 0.01);
+    const hasTx = s.transactions.some(
+      (t) => t.date.startsWith(monthKey) && t.envelopeId === bill.envelopeId && Math.abs(t.amount - bill.amount) < 0.01,
+    );
     if (!hasTx) {
-      const day = String(bill.dueDay).padStart(2, "0");
       s.transactions.unshift({
         id: `tx-bill-${bill.id}-${monthKey}`,
-        date: `${monthKey}-${day}`,
+        date: `${monthKey}-${String(bill.dueDay).padStart(2, "0")}`,
         payee: bill.name,
         type: "expense",
         amount: bill.amount,

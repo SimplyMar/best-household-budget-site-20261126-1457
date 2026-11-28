@@ -1,7 +1,8 @@
 // Sinking funds & interactive debt payoff simulator (#/goals): compares Avalanche, Snowball, and Minimums Only.
 
-import { formatMoney, simulateDebtPayoff } from "./budget-math.js";
-import { escapeHtml, renderDebtComparisonSvg } from "./charts.js";
+import { formatMoney } from "./budget-math.js";
+import { escapeHtml } from "./charts.js";
+import { renderDebtComparisonSvg, simulateDebtPayoff } from "./debt-lab.js";
 
 export function renderGoalsDebtPage(state) {
   const extra = Number(state.whatIf.extraDebtPayment ?? 315);
@@ -13,14 +14,15 @@ export function renderGoalsDebtPage(state) {
   const chosen = activeStrategy === "avalanche" ? avalanche : snowball;
 
   const interestSavedVsMin = Math.max(0, minOnly.totalInterest - chosen.totalInterest);
+  const interestSavedVsSnow = Math.max(0, snowball.totalInterest - avalanche.totalInterest);
   const monthsSavedVsMin = Math.max(0, minOnly.months - chosen.months);
   const totalDebt = state.debts.reduce((s, d) => s + d.balance, 0);
 
   return `
   <section class="page-hero-bar">
     <div>
-      <h1>Sinking Reserves &amp; Debt Payoff Lab</h1>
-      <p class="muted">Fund upcoming capital expenses in cash while accelerating debt payoff with transparent amortization math.</p>
+      <h1 class="page-title">Sinking Reserves &amp; Debt Payoff Lab</h1>
+      <p class="page-sub">Fund upcoming capital expenses in cash while comparing Avalanche, Snowball, and Minimum payoff curves.</p>
     </div>
     <div class="zero-equation">
       <div><span>Remaining Debt</span><strong>${formatMoney(totalDebt)}</strong></div>
@@ -53,7 +55,7 @@ export function renderGoalsDebtPage(state) {
         <div class="meter"><span class="meter-fill bar-ok" style="width:${pct.toFixed(1)}%"></span></div>
         <p class="muted small-memo">${escapeHtml(g.notes)}</p>
         <div class="goal-foot">
-          <span>Plan: <strong>${formatMoney(g.monthlyPlan)}/mo</strong> (${monthsLeft} mo left)</span>
+          <span><strong>${formatMoney(g.monthlyPlan)}/mo</strong> (${monthsLeft} mo left)</span>
           <button type="button" class="btn-chip chip-paid" data-action="boost-goal" data-goal-id="${escapeHtml(g.id)}">+$50 Boost</button>
         </div>
       </article>`;
@@ -65,20 +67,16 @@ export function renderGoalsDebtPage(state) {
       <div class="panel-head">
         <div>
           <h2>Avalanche vs. Snowball vs. Minimums</h2>
-          <p class="muted">Minimums total $465/mo (${minOnly.months} mo). Slide extra principal to compare curves.</p>
+          <p class="muted">Minimums total $465/mo (${minOnly.months} mo). Slide extra principal to compare amortization.</p>
         </div>
         <div class="strategy-toggle" role="group" aria-label="Payoff strategy">
-          <button type="button" class="pill-btn ${activeStrategy === "avalanche" ? "active" : ""}" data-action="set-debt-strategy" data-strategy="avalanche">
-            Avalanche (Highest APR)
-          </button>
-          <button type="button" class="pill-btn ${activeStrategy === "snowball" ? "active" : ""}" data-action="set-debt-strategy" data-strategy="snowball">
-            Snowball (Smallest Bal)
-          </button>
+          <button type="button" class="pill-btn ${activeStrategy === "avalanche" ? "active" : ""}" data-action="set-debt-strategy" data-strategy="avalanche">Avalanche</button>
+          <button type="button" class="pill-btn ${activeStrategy === "snowball" ? "active" : ""}" data-action="set-debt-strategy" data-strategy="snowball">Snowball</button>
         </div>
       </div>
 
       <label class="slider-control">
-        <span>Extra Monthly Principal Above Minimums: <strong>${formatMoney(extra)}/mo</strong> (Total payment: ${formatMoney(chosen.monthlyBudget)}/mo)</span>
+        <span>Extra Monthly Principal: <strong>${formatMoney(extra)}/mo</strong> (Total payment: ${formatMoney(chosen.monthlyBudget)}/mo)</span>
         <input type="range" min="0" max="700" step="25" value="${extra}" data-action="extra-debt-slider">
       </label>
 
@@ -120,7 +118,12 @@ export function renderGoalsDebtPage(state) {
         </tbody>
       </table>
       <div class="callout-box">
-        <strong>Why Avalanche wins for Mercer-Lin:</strong> Targeting the <strong>18.9% Storm Fence &amp; Roof Card</strong> first eliminates high-APR interest in ${avalanche.payoffOrder[0]?.month ?? 7} months, saving <strong>${formatMoney(interestSavedVsMin)}</strong> vs. minimum payments and <strong>${formatMoney(Math.max(0, snowball.totalInterest - avalanche.totalInterest))}</strong> vs. Snowball.
+        <strong>Why Avalanche wins for Mercer-Lin:</strong> Attacking the <strong>21.9% Roof &amp; Remodel Card</strong> first clears high-APR debt in ${avalanche.payoffOrder[0]?.month ?? 13} months, saving <strong>${formatMoney(interestSavedVsMin)}</strong> vs. minimums and <strong>${formatMoney(interestSavedVsSnow)}</strong> vs. Snowball.
+      </div>
+      <div class="scenario-kpis" style="margin-top:9px;margin-bottom:0">
+        <div><span>Avalanche Total Int.</span><strong>${formatMoney(avalanche.totalInterest)}</strong></div>
+        <div><span>Snowball Total Int.</span><strong>${formatMoney(snowball.totalInterest)}</strong></div>
+        <div><span>Minimums Total Int.</span><strong class="amt-neg">${formatMoney(minOnly.totalInterest)}</strong></div>
       </div>
     </section>
   </div>`;

@@ -1,19 +1,37 @@
-// End-to-end verification and screenshot capture over Chrome DevTools Protocol (zero external packages).
+// End-to-end verification and gate-safe screenshot capture over Chrome DevTools Protocol (zero external packages).
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const port = 8147;
-const debugPort = 9367;
+function readJpegDimensions(buf) {
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) { i += 1; continue; }
+    const marker = buf[i + 1];
+    if (marker === 0xd8 || marker === 0xd9) { i += 2; continue; }
+    const len = buf.readUInt16BE(i + 2);
+    if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) || (marker >= 0xc9 && marker <= 0xcb)) {
+      return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+    }
+    i += 2 + len;
+  }
+  throw new Error("Could not parse JPEG dimensions");
+}
+
+const port = 8149;
+const debugPort = 9369;
 const chromePath = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const profile = join(root, ".tmp", `chrome-shot-${debugPort}`);
 rmSync(profile, { recursive: true, force: true });
 mkdirSync(profile, { recursive: true });
-mkdirSync(join(root, "screenshots"), { recursive: true });
+
+const shotsDir = join(root, "screenshots");
+mkdirSync(shotsDir, { recursive: true });
+for (const old of readdirSync(shotsDir)) rmSync(join(shotsDir, old), { force: true });
 
 const server = spawn(process.execPath, [join(root, "serve.ts"), "--port", String(port)], { stdio: "ignore" });
 const chrome = spawn(chromePath, [
@@ -32,9 +50,7 @@ for (let i = 0; i < 60 && !wsUrl; i += 1) {
   try {
     const targets = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json();
     wsUrl = targets.find((t) => t.type === "page")?.webSocketDebuggerUrl ?? null;
-  } catch {
-    // Wait for Chrome debug endpoint.
-  }
+  } catch { /* wait for Chrome */ }
   if (!wsUrl) await sleep(200);
 }
 if (!wsUrl) {
@@ -76,9 +92,7 @@ const send = (method, params = {}) => new Promise((resolve) => {
 
 const evaluate = async (expression) => {
   const res = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  if (res.result?.exceptionDetails) {
-    throw new Error(res.result.exceptionDetails.exception?.description ?? "eval error");
-  }
+  if (res.result?.exceptionDetails) throw new Error(res.result.exceptionDetails.exception?.description ?? "eval error");
   return res.result?.result?.value;
 };
 
@@ -97,38 +111,47 @@ try {
 
   const shots = JSON.parse(readFileSync(join(root, "shots.json"), "utf8"));
   for (const shot of shots) {
+    const scale = Number(shot.scale ?? (shot.mobile ? 1.5 : 1));
     await send("Emulation.setDeviceMetricsOverride", {
       width: shot.viewport.width,
       height: shot.viewport.height,
-      deviceScaleFactor: shot.mobile ? 2 : 1,
+      deviceScaleFactor: scale,
       mobile: Boolean(shot.mobile),
     });
     await send("Page.navigate", { url: `http://127.0.0.1:${port}/index.html${shot.path}` });
     await waitReady();
-    await sleep(150);
-    const overflow = await evaluate('document.documentElement.scrollWidth - window.innerWidth');
-    if (overflow > 1) throw new Error(shot.file + ' has horizontal overflow: ' + overflow + 'px');
+    await sleep(160);
 
-    // If deviceScaleFactor=2 exceeds 256 KiB, step quality or scale=1.5 down cleanly so every JPEG stays <240 KiB.
-    let quality = shot.mobile ? 80 : 86;
+    const overflow = await evaluate("document.documentElement.scrollWidth - window.innerWidth");
+    if (overflow > 1) throw new Error(`${shot.file} horizontal overflow: ${overflow}px`);
+
+    let quality = 86;
     let buf = Buffer.from((await send("Page.captureScreenshot", { format: "jpeg", quality })).result.data, "base64");
     while (buf.byteLength > 245000 && quality > 55) {
-      quality -= 8;
+      quality -= 6;
       buf = Buffer.from((await send("Page.captureScreenshot", { format: "jpeg", quality })).result.data, "base64");
     }
-    const outFile = join(root, "screenshots", shot.file);
+    const { width, height } = readJpegDimensions(buf);
+    const longSide = Math.max(width, height);
+    const shortSide = Math.min(width, height);
+    if (longSide > 1280) throw new Error(`${shot.file} long side ${longSide}px exceeds 1280px cap`);
+    if (shortSide < 360) throw new Error(`${shot.file} short side ${shortSide}px below 360px floor`);
+    if (buf.byteLength > 262144) throw new Error(`${shot.file} size ${buf.byteLength} exceeds 256 KiB cap`);
+
+    const outFile = join(shotsDir, shot.file);
     writeFileSync(outFile, buf);
-    console.log(`Captured ${shot.file}: ${statSync(outFile).size} bytes (q=${quality})`);
+    console.log(`Captured ${shot.file}: ${width}x${height}px, ${statSync(outFile).size} bytes (q=${quality})`);
   }
 
-  // Also smoke-test the remaining 2 routes (#/bills, #/planner) and interactive mutations!
-  await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  // Smoke-test remaining desktop routes + interactive state mutations.
+  await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 760, deviceScaleFactor: 1, mobile: false });
   for (const route of ["#/bills", "#/planner", "#/"]) {
     await send("Page.navigate", { url: `http://127.0.0.1:${port}/index.html${route}` });
     await waitReady();
+    const ov = await evaluate("document.documentElement.scrollWidth - window.innerWidth");
+    if (ov > 1) throw new Error(`Route ${route} overflow: ${ov}px`);
   }
 
-  // Test interactive quick-cover button on Overview & verify overspent count drops to 0, then reset!
   const beforeAlerts = await evaluate("document.querySelectorAll('.alert-banner').length");
   await evaluate("document.querySelector('[data-action=\"quick-cover\"]')?.click()");
   await waitReady();
@@ -139,7 +162,7 @@ try {
   console.log("Interactive check:", { beforeAlerts, afterAlerts, errors: errors.length, externalRequests: externalRequests.length });
   if (beforeAlerts !== 1 || afterAlerts !== 0) throw new Error(`Expected alert 1 -> 0, got ${beforeAlerts} -> ${afterAlerts}`);
   if (errors.length > 0) throw new Error(`Console/runtime errors: ${errors.join("; ")}`);
-  if (externalRequests.length > 0) throw new Error(`External requests detected: ${externalRequests.join(", ")}`);
+  if (externalRequests.length > 0) throw new Error(`External requests: ${externalRequests.join(", ")}`);
   console.log("ALL SMOKE CHECKS PASSED");
 } finally {
   socket.close();
